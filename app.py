@@ -7,6 +7,7 @@ John Stewart & Associates
 Data source: U.S. EIA Open Data API v2 (https://api.eia.gov/v2)
 """
 
+import base64
 import os
 import re
 from datetime import date
@@ -63,6 +64,19 @@ PLANT_FUEL_COLORS = {
 }
 
 JSA_LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
+
+
+@st.cache_data
+def _asset_uri(filename: str) -> str:
+    p = os.path.join(os.path.dirname(__file__), "assets", filename)
+    try:
+        with open(p, "rb") as f:
+            return "data:image/png;base64," + base64.b64encode(f.read()).decode()
+    except OSError:
+        return ""
+
+
+WATERMARK = _asset_uri("jsa_50yr.png")
 
 st.set_page_config(
     page_title="JSA EIA Energy Dashboard",
@@ -128,6 +142,21 @@ st.markdown(f"""
       margin: 20px 0 6px 0;
   }}
   .note-text {{ color: {DM_MUTED}; font-size: 0.78rem; }}
+
+  /* JSA watermark on charts and snapshot tables */
+  [data-testid="stPlotlyChart"] {{ position: relative; }}
+  [data-testid="stPlotlyChart"]::before {{
+      content: ""; position: absolute; inset: 0;
+      background: url('{WATERMARK}') center 50% / 26% auto no-repeat;
+      opacity: 0.10; pointer-events: none; z-index: 0;
+  }}
+  [data-testid="stPlotlyChart"] .main-svg {{ position: relative; z-index: 1; }}
+  table[id^="snap_"] {{ position: relative; }}
+  table[id^="snap_"]::after {{
+      content: ""; position: absolute; inset: 0;
+      background: url('{WATERMARK}') center 50% / 22% auto no-repeat;
+      opacity: 0.07; pointer-events: none; z-index: 5;
+  }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -352,8 +381,11 @@ with st.sidebar:
     st.markdown("### EIA Energy Dashboard")
     section = st.radio("Section", ["Weekly EIA Report", "Natural Gas", "Ethanol & Biofuels"], index=0)
     st.markdown("---")
-    lookback = st.selectbox("Chart lookback", ["1 Year", "2 Years", "5 Years", "Max"], index=1)
-    lookback_years = {"1 Year": 1, "2 Years": 2, "5 Years": 5, "Max": None}[lookback]
+    LOOKBACK_OPTIONS = {
+        "Since Jan 2021": "2021-01-01",
+        "1 Year": None, "2 Years": None, "5 Years": None, "Max": None,
+    }
+    lookback = st.selectbox("Chart lookback", list(LOOKBACK_OPTIONS.keys()), index=0)
     st.markdown("---")
     st.markdown(
         f"<div class='note-text'>Source: U.S. Energy Information Administration<br>"
@@ -361,8 +393,9 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-start_date = None
-if lookback_years:
+start_date = LOOKBACK_OPTIONS[lookback]
+if start_date is None and lookback != "Max":
+    lookback_years = {"1 Year": 1, "2 Years": 2, "5 Years": 5}[lookback]
     start_date = (pd.Timestamp.today() - pd.DateOffset(years=lookback_years)).strftime("%Y-%m-%d")
 
 st.title("⚡ EIA Energy Dashboard")
@@ -910,9 +943,9 @@ else:
     eth_padd = eia_get("petroleum/pnp/wprode", {"product": "EPOOXE"}, start=start_date)
     eth_exports = eia_get("petroleum/move/wkly", {"duoarea": "NUS-Z00", "product": "EPOOXE", "process": "EEX"},
                            start=start_date)
-    capbio = eia_get("petroleum/pnp/capbio")
-    feedstocks = eia_get("petroleum/pnp/feedbiofuel")
-    plant_fuel = eia_get("petroleum/pnp/bioplfuel")
+    capbio = eia_get("petroleum/pnp/capbio", start=start_date)
+    feedstocks = eia_get("petroleum/pnp/feedbiofuel", start=start_date)
+    plant_fuel = eia_get("petroleum/pnp/bioplfuel", start=start_date)
 
     prod = eth_weekly[eth_weekly["process"] == "YOP"] if not eth_weekly.empty else pd.DataFrame()
     stocks = eth_weekly[eth_weekly["process"] == "SAE"] if not eth_weekly.empty else pd.DataFrame()
