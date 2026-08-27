@@ -147,15 +147,15 @@ st.markdown(f"""
   [data-testid="stPlotlyChart"] {{ position: relative; }}
   [data-testid="stPlotlyChart"]::before {{
       content: ""; position: absolute; inset: 0;
-      background: url('{WATERMARK}') center 50% / 26% auto no-repeat;
-      opacity: 0.10; pointer-events: none; z-index: 0;
+      background: url('{WATERMARK}') center 50% / 34% auto no-repeat;
+      opacity: 0.16; pointer-events: none; z-index: 0;
   }}
   [data-testid="stPlotlyChart"] .main-svg {{ position: relative; z-index: 1; }}
   table[id^="snap_"] {{ position: relative; }}
   table[id^="snap_"]::after {{
       content: ""; position: absolute; inset: 0;
-      background: url('{WATERMARK}') center 50% / 22% auto no-repeat;
-      opacity: 0.07; pointer-events: none; z-index: 5;
+      background: url('{WATERMARK}') center 50% / 28% auto no-repeat;
+      opacity: 0.11; pointer-events: none; z-index: 5;
   }}
 </style>
 """, unsafe_allow_html=True)
