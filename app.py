@@ -20,13 +20,13 @@ import streamlit as st
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# ── Theme ─────────────────────────────────────────────────────────────────────
-DM_BG        = "#0c1116"
-DM_SURFACE   = "#141c24"
-DM_SURFACE2  = "#1b2530"
-DM_BORDER    = "#2a3846"
-DM_TEXT      = "#e7edf3"
-DM_MUTED     = "#84939f"
+# ── Theme (light, matching the other JSA dashboards) ──────────────────────────
+DM_BG        = "#f7f9fa"
+DM_SURFACE   = "#ffffff"
+DM_SURFACE2  = "#f0f2f4"
+DM_BORDER    = "#dde3e8"
+DM_TEXT      = "#1f2328"
+DM_MUTED     = "#6b7280"
 
 JSA_BLUE     = "#0693e3"
 COL_NATGAS   = "#3fa9f5"
@@ -63,7 +63,7 @@ PLANT_FUEL_COLORS = {
     "Natural Gas for Hydrogen Feedstock": "#1f6fb2",
 }
 
-JSA_LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
+JSA_LOGO_FULL = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
 
 
 @st.cache_data
@@ -147,15 +147,15 @@ st.markdown(f"""
   [data-testid="stPlotlyChart"] {{ position: relative; }}
   [data-testid="stPlotlyChart"]::before {{
       content: ""; position: absolute; inset: 0;
-      background: url('{WATERMARK}') center 50% / 34% auto no-repeat;
-      opacity: 0.16; pointer-events: none; z-index: 0;
+      background: url('{WATERMARK}') center 50% / 28% auto no-repeat;
+      opacity: 0.12; pointer-events: none; z-index: 0;
   }}
   [data-testid="stPlotlyChart"] .main-svg {{ position: relative; z-index: 1; }}
   table[id^="snap_"] {{ position: relative; }}
   table[id^="snap_"]::after {{
       content: ""; position: absolute; inset: 0;
-      background: url('{WATERMARK}') center 50% / 28% auto no-repeat;
-      opacity: 0.11; pointer-events: none; z-index: 5;
+      background: url('{WATERMARK}') center 50% / 24% auto no-repeat;
+      opacity: 0.09; pointer-events: none; z-index: 5;
   }}
 </style>
 """, unsafe_allow_html=True)
@@ -377,9 +377,16 @@ def _snap_toolbar(snap_id: str, filename: str):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.image(JSA_LOGO_WHITE, width=180)
+    st.image(JSA_LOGO_FULL, width=180)
     st.markdown("### EIA Energy Dashboard")
-    section = st.radio("Section", ["Weekly EIA Report", "Natural Gas", "Ethanol & Biofuels"], index=0)
+    section = st.radio("Section", ["Weekly EIA Report", "Natural Gas", "Ethanol (Weekly)",
+                                    "Biofuel Feedstocks (Monthly)"], index=0)
+    st.markdown("---")
+    if st.button("🔄 Refresh Data Now", width='stretch'):
+        eia_get.clear()
+        st.rerun()
+    st.caption("Forces a fresh pull from EIA, bypassing the 30-min cache — use this after a "
+               "new report has published.")
     st.markdown("---")
     LOOKBACK_OPTIONS = {
         "Since Jan 2021": "2021-01-01",
@@ -936,26 +943,21 @@ elif section == "Natural Gas":
 # ══════════════════════════════════════════════════════════════════════════════
 # ETHANOL & BIOFUELS
 # ══════════════════════════════════════════════════════════════════════════════
-else:
+elif section == "Ethanol (Weekly)":
     eth_weekly = eia_get("petroleum/sum/sndw",
                           {"duoarea": "NUS", "product": "EPOOXE",
                            "process": ["YOP", "SAE", "YIR"]}, start=start_date)
     eth_padd = eia_get("petroleum/pnp/wprode", {"product": "EPOOXE"}, start=start_date)
     eth_exports = eia_get("petroleum/move/wkly", {"duoarea": "NUS-Z00", "product": "EPOOXE", "process": "EEX"},
                            start=start_date)
-    capbio = eia_get("petroleum/pnp/capbio", start=start_date)
-    feedstocks = eia_get("petroleum/pnp/feedbiofuel", start=start_date)
-    plant_fuel = eia_get("petroleum/pnp/bioplfuel", start=start_date)
 
     prod = eth_weekly[eth_weekly["process"] == "YOP"] if not eth_weekly.empty else pd.DataFrame()
     stocks = eth_weekly[eth_weekly["process"] == "SAE"] if not eth_weekly.empty else pd.DataFrame()
-    cap_latest_month = capbio["period"].max() if not capbio.empty else None
-    cap_snap = capbio[capbio["period"] == cap_latest_month] if cap_latest_month is not None else pd.DataFrame()
-    total_cap = cap_snap["value"].sum() if not cap_snap.empty else None
 
-    ng_at_biofuel = plant_fuel[plant_fuel["process"] == "819NG0"] if not plant_fuel.empty else pd.DataFrame()
+    st.caption("EIA's weekly petroleum status report — production, stocks, and exports "
+               "typically lag only about a week.")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3 = st.columns(3)
     with c1:
         v, d, pct = latest_and_delta(prod)
         st.metric("Ethanol Production (kb/d)", fmt_num(v, 0),
@@ -968,14 +970,6 @@ else:
         v, d, pct = latest_and_delta(eth_exports)
         st.metric("Ethanol Exports (kb/d)", fmt_num(v, 0),
                    f"{d:+,.0f} kb/d WoW" if d is not None else None)
-    with c4:
-        st.metric("Ethanol + Biodiesel + RD Capacity (MMgal/yr)", fmt_num(total_cap, 0),
-                   cap_latest_month.strftime("%b %Y") if cap_latest_month is not None else None)
-    with c5:
-        v, d, pct = latest_and_delta(ng_at_biofuel)
-        v_bcf = v / 1000 if v is not None else None
-        st.metric("Nat Gas Used at Biofuel Plants (Bcf/yr)", fmt_num(v_bcf, 0),
-                   f"{pct:+.1f}% YoY" if pct is not None else None)
 
     # ── Weekly ethanol production, stocks & exports ──────────────────────────
     section_header("Weekly U.S. Fuel Ethanol Production, Stocks & Exports")
@@ -1030,6 +1024,44 @@ else:
         _snap_toolbar("snap_eth_padd", "Weekly Ethanol Production by PADD")
     else:
         st.info("No PADD-level ethanol data returned.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BIOFUEL FEEDSTOCKS (MONTHLY)
+# ══════════════════════════════════════════════════════════════════════════════
+else:
+    capbio = eia_get("petroleum/pnp/capbio", start=start_date)
+    feedstocks = eia_get("petroleum/pnp/feedbiofuel", start=start_date)
+    plant_fuel = eia_get("petroleum/pnp/bioplfuel", start=start_date)
+
+    cap_latest_month = capbio["period"].max() if not capbio.empty else None
+    cap_snap = capbio[capbio["period"] == cap_latest_month] if cap_latest_month is not None else pd.DataFrame()
+    total_cap = cap_snap["value"].sum() if not cap_snap.empty else None
+
+    feed_latest_month = feedstocks["period"].max() if not feedstocks.empty else None
+    ng_at_biofuel = plant_fuel[plant_fuel["process"] == "819NG0"] if not plant_fuel.empty else pd.DataFrame()
+
+    if feed_latest_month is not None:
+        today = pd.Timestamp.today()
+        lag_months = (today.year - feed_latest_month.year) * 12 + (today.month - feed_latest_month.month)
+        st.info(
+            f"📅 EIA's biofuels feedstock survey is monthly and published with a lag — the "
+            f"latest available month is **{feed_latest_month.strftime('%B %Y')}**, "
+            f"{lag_months} month{'s' if lag_months != 1 else ''} behind today "
+            f"({today.strftime('%B %Y')}). Capacity data lags similarly "
+            f"({cap_latest_month.strftime('%B %Y') if cap_latest_month is not None else '—'}). "
+            f"Use **🔄 Refresh Data Now** in the sidebar after a new report has published to "
+            f"bypass the 30-minute cache."
+        )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Ethanol + Biodiesel + RD Capacity (MMgal/yr)", fmt_num(total_cap, 0),
+                   cap_latest_month.strftime("%b %Y") if cap_latest_month is not None else None)
+    with c2:
+        v, d, pct = latest_and_delta(ng_at_biofuel)
+        v_bcf = v / 1000 if v is not None else None
+        st.metric("Nat Gas Used at Biofuel Plants (Bcf/yr)", fmt_num(v_bcf, 0),
+                   f"{pct:+.1f}% YoY" if pct is not None else None)
 
     # ── Biofuels production capacity ────────────────────────────────────────
     section_header("Biofuels Operable Production Capacity")
