@@ -1032,6 +1032,10 @@ else:
     capbio = eia_get("petroleum/pnp/capbio", start=start_date)
     feedstocks = eia_get("petroleum/pnp/feedbiofuel", start=start_date)
     plant_fuel = eia_get("petroleum/pnp/bioplfuel", start=start_date)
+    # Full, unfiltered history for the comparison tables below — YoY, YTD, and the
+    # 3-yr seasonal average all need years of lookback regardless of the sidebar's
+    # chart-display lookback setting.
+    feedstocks_hist = eia_get("petroleum/pnp/feedbiofuel")
 
     cap_latest_month = capbio["period"].max() if not capbio.empty else None
     cap_snap = capbio[capbio["period"] == cap_latest_month] if cap_latest_month is not None else pd.DataFrame()
@@ -1122,11 +1126,120 @@ else:
         "EPOOBDAFPO": ("Other Ag/Forestry Products", "Other Feedstocks"),
         "EPOOBDOB": ("Other Biofuel Feedstocks", "Other Feedstocks"),
     }
+    FEED8_MAP = {
+        "Soybean Oil": "Soybean Oil", "Corn Oil": "Corn Oil", "Canola Oil": "Canola Oil",
+        "Yellow Grease": "Yellow Grease", "Tallow": "Tallow", "White Grease": "White Grease",
+        "Poultry Fat": "Poultry",
+    }
+    FEED8_ORDER = ["Soybean Oil", "Corn Oil", "Canola Oil", "Yellow Grease",
+                   "Tallow", "White Grease", "Poultry", "Other"]
+    FEED8_COLORS = {
+        "Soybean Oil": "#b5651d", "Corn Oil": "#2f4f2f", "Canola Oil": "#deb887",
+        "Yellow Grease": "#6a5acd", "Tallow": "#c0392b", "White Grease": "#9acd32",
+        "Poultry": "#4169e1", "Other": "#87ceeb",
+    }
+
+    def build_feedstock_compare_table(df, cat_col, categories, snap_id, decimals=0):
+        """Monthly comparison table: last 4 months, same month LY, M/M %, Y/Y %,
+        3-yr seasonal average (same calendar month, prior 3 years), vs-3yr %,
+        and YTD vs YTD-LY (same year-to-date span). `df` must have a `period`,
+        `cat_col`, and `value` column and carry full (unfiltered) history."""
+        if df.empty:
+            return None
+        latest_m = df["period"].max()
+        month_cols = [latest_m - pd.DateOffset(months=n) for n in (3, 2, 1, 0)]
+        ly_month = latest_m - pd.DateOffset(months=12)
+        seasonal_months = [pd.Timestamp(year=latest_m.year - n, month=latest_m.month, day=1)
+                           for n in (1, 2, 3)]
+        ytd_start = pd.Timestamp(latest_m.year, 1, 1)
+        ytd_start_ly = pd.Timestamp(latest_m.year - 1, 1, 1)
+
+        def val_at(cat, period):
+            sub = df[(df[cat_col] == cat) & (df["period"] == period)] if cat is not None \
+                else df[df["period"] == period]
+            return sub["value"].sum() if not sub.empty else None
+
+        def sum_range(cat, start, end):
+            mask = (df["period"] >= start) & (df["period"] <= end)
+            if cat is not None:
+                mask &= df[cat_col] == cat
+            sub = df[mask]
+            return sub["value"].sum() if not sub.empty else None
+
+        def pct(a, b):
+            if a is None or b is None or b == 0:
+                return None
+            return (a / b - 1) * 100
+
+        def fmt_val(v):
+            return f"{v:,.{decimals}f}" if v is not None else "—"
+
+        def fmt_pct(v):
+            if v is None:
+                return "<span style='color:{}'>—</span>".format(DM_MUTED)
+            return f"<span style='color:{POS if v >= 0 else NEG}'>{v:+.1f}%</span>"
+
+        headers = (["Feedstock"] + [m.strftime("%b '%y") for m in month_cols] +
+                   [f"{ly_month.strftime('%b')} '{str(ly_month.year)[-2:]} (LY)", "M/M %", "Y/Y %",
+                    "3-Yr Avg", "vs 3-Yr", f"YTD '{str(latest_m.year)[-2:]}",
+                    f"YTD '{str(latest_m.year - 1)[-2:]}", "YTD %"])
+        header_html = "".join(
+            f"<th style='padding:4px 8px;text-align:{'left' if i == 0 else 'right'};"
+            f"color:{DM_MUTED};font-size:0.68rem;text-transform:uppercase;white-space:nowrap'>"
+            f"{h}</th>" for i, h in enumerate(headers))
+
+        rows_html = ""
+        row_specs = [(c, c) for c in categories] + [("__TOTAL__", "Total")]
+        for cat_key, label in row_specs:
+            cat = None if cat_key == "__TOTAL__" else cat_key
+            vals = [val_at(cat, m) for m in month_cols]
+            ly_val = val_at(cat, ly_month)
+            mom = pct(vals[-1], vals[-2])
+            yoy = pct(vals[-1], ly_val)
+            seasonal_vals = [v for v in (val_at(cat, m) for m in seasonal_months) if v is not None]
+            seasonal_avg = sum(seasonal_vals) / len(seasonal_vals) if seasonal_vals else None
+            vs_seasonal = pct(vals[-1], seasonal_avg)
+            ytd = sum_range(cat, ytd_start, latest_m)
+            ytd_ly = sum_range(cat, ytd_start_ly, ly_month)
+            ytd_chg = pct(ytd, ytd_ly)
+
+            bold = "font-weight:700;border-top:1px solid " + DM_BORDER if cat_key == "__TOTAL__" else ""
+            cells = [f"<td style='padding:4px 8px;{bold}'>{label}</td>"]
+            for v in vals:
+                cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_val(v)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_val(ly_val)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_pct(mom)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_pct(yoy)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_val(seasonal_avg)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_pct(vs_seasonal)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_val(ytd)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_val(ytd_ly)}</td>")
+            cells.append(f"<td style='padding:4px 8px;text-align:right;{bold}'>{fmt_pct(ytd_chg)}</td>")
+            rows_html += f"<tr>{''.join(cells)}</tr>"
+
+        table_html = (
+            f"<div style='overflow-x:auto'>"
+            f"<table id='{snap_id}' style='width:100%;border-collapse:collapse;background:{DM_SURFACE};"
+            f"border:1px solid {DM_BORDER};border-radius:6px;font-size:0.82rem'>"
+            f"<tr>{header_html}</tr>{rows_html}</table></div>"
+            f"<div class='note-text' style='margin:4px 0 16px 0'>"
+            f"YTD = Jan–{latest_m.strftime('%b %Y')} vs. Jan–{ly_month.strftime('%b %Y')}. "
+            f"3-Yr Avg = average {latest_m.strftime('%B')} across "
+            f"{seasonal_months[-1].year}–{seasonal_months[0].year}.</div>"
+        )
+        return table_html
+
     if not feedstocks.empty:
         fs = feedstocks[feedstocks["product"].isin(FEEDSTOCK_GROUPS.keys())].copy()
         fs["feedstock"] = fs["product"].map(lambda p: FEEDSTOCK_GROUPS[p][0])
         fs["family"] = fs["product"].map(lambda p: FEEDSTOCK_GROUPS[p][1])
         latest_m = fs["period"].max()
+
+        fs_hist = feedstocks_hist[feedstocks_hist["product"].isin(FEEDSTOCK_GROUPS.keys())].copy()
+        fs_hist["feedstock"] = fs_hist["product"].map(lambda p: FEEDSTOCK_GROUPS[p][0])
+        fs_hist["family"] = fs_hist["product"].map(lambda p: FEEDSTOCK_GROUPS[p][1])
+        bd_hist = fs_hist[fs_hist["family"] != "Grains (Ethanol)"].copy()
+        bd_hist["bucket8"] = bd_hist["feedstock"].map(FEED8_MAP).fillna("Other")
 
         st.markdown("**Corn & Grain Sorghum Inputs to Ethanol Production**")
         grains = fs[fs["family"] == "Grains (Ethanol)"]
@@ -1142,21 +1255,15 @@ else:
         st.plotly_chart(fig, width='stretch')
         _snap_toolbar("snap_feed_grains", "Corn & Grain Sorghum Inputs to Ethanol Production")
 
+        grains_table = build_feedstock_compare_table(
+            fs_hist[fs_hist["family"] == "Grains (Ethanol)"], "feedstock",
+            ["Corn", "Grain Sorghum"], "snap_grains_table")
+        if grains_table:
+            st.markdown(grains_table, unsafe_allow_html=True)
+            _snap_toolbar("snap_grains_table", "Corn & Grain Sorghum — Monthly Comparison (Million lbs)")
+
         st.markdown("**Feedstocks for Biodiesel & Renewable Diesel Production**")
         bd = fs[fs["family"] != "Grains (Ethanol)"]
-
-        FEED8_MAP = {
-            "Soybean Oil": "Soybean Oil", "Corn Oil": "Corn Oil", "Canola Oil": "Canola Oil",
-            "Yellow Grease": "Yellow Grease", "Tallow": "Tallow", "White Grease": "White Grease",
-            "Poultry Fat": "Poultry",
-        }
-        FEED8_ORDER = ["Soybean Oil", "Corn Oil", "Canola Oil", "Yellow Grease",
-                       "Tallow", "White Grease", "Poultry", "Other"]
-        FEED8_COLORS = {
-            "Soybean Oil": "#b5651d", "Corn Oil": "#2f4f2f", "Canola Oil": "#deb887",
-            "Yellow Grease": "#6a5acd", "Tallow": "#c0392b", "White Grease": "#9acd32",
-            "Poultry": "#4169e1", "Other": "#87ceeb",
-        }
         bd = bd.copy()
         bd["bucket8"] = bd["feedstock"].map(FEED8_MAP).fillna("Other")
 
@@ -1186,6 +1293,11 @@ else:
             st.plotly_chart(fig, width='stretch')
             st.caption(f"Top biodiesel/RD feedstocks, {latest_m.strftime('%b %Y')}")
             _snap_toolbar("snap_feed_top10", f"Top Biodiesel-RD Feedstocks {latest_m.strftime('%b %Y')}")
+
+        bd_table = build_feedstock_compare_table(bd_hist, "bucket8", FEED8_ORDER, "snap_bd_table")
+        if bd_table:
+            st.markdown(bd_table, unsafe_allow_html=True)
+            _snap_toolbar("snap_bd_table", "Biodiesel-RD Feedstocks — Monthly Comparison (Million lbs)")
 
         # ── Market share (% of the 8-bucket total) ────────────────────────────
         st.markdown("**Feedstocks Demand Market Share for Biofuel Production**")
