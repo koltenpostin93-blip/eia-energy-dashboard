@@ -1139,20 +1139,39 @@ else:
         "Poultry": "#4169e1", "Other": "#87ceeb",
     }
 
-    def build_feedstock_compare_table(df, cat_col, categories, snap_id, decimals=0):
+    def build_feedstock_compare_table(df, cat_col, categories, snap_id, decimals=0,
+                                       value_divisor=1.0, ytd_mode="calendar"):
         """Monthly comparison table: last 4 months, same month LY, M/M %, Y/Y %,
         3-yr seasonal average (same calendar month, prior 3 years), vs-3yr %,
-        and YTD vs YTD-LY (same year-to-date span). `df` must have a `period`,
-        `cat_col`, and `value` column and carry full (unfiltered) history."""
+        and a YTD vs YTD-LY comparison. `df` must have a `period`, `cat_col`, and
+        `value` column and carry full (unfiltered) history. `value_divisor` rescales
+        the raw value (e.g. 56 to convert million lbs to million bushels).
+        `ytd_mode` is "calendar" (Jan-Dec) or "marketing" (Sep-Aug, corn/sorghum
+        marketing year)."""
         if df.empty:
             return None
+        df = df.assign(value=df["value"] / value_divisor)
         latest_m = df["period"].max()
         month_cols = [latest_m - pd.DateOffset(months=n) for n in (3, 2, 1, 0)]
         ly_month = latest_m - pd.DateOffset(months=12)
         seasonal_months = [pd.Timestamp(year=latest_m.year - n, month=latest_m.month, day=1)
                            for n in (1, 2, 3)]
-        ytd_start = pd.Timestamp(latest_m.year, 1, 1)
-        ytd_start_ly = pd.Timestamp(latest_m.year - 1, 1, 1)
+        if ytd_mode == "marketing":
+            my_start_year = latest_m.year if latest_m.month >= 9 else latest_m.year - 1
+            ytd_start = pd.Timestamp(my_start_year, 9, 1)
+            ytd_start_ly = pd.Timestamp(my_start_year - 1, 9, 1)
+            ytd_label = f"MYTD '{str(my_start_year)[-2:]}-{str(my_start_year + 1)[-2:]}"
+            ytd_label_ly = f"MYTD '{str(my_start_year - 1)[-2:]}-{str(my_start_year)[-2:]}"
+            ytd_caption = (f"Marketing YTD = {ytd_start.strftime('%b %Y')}–{latest_m.strftime('%b %Y')} "
+                           f"vs. {ytd_start_ly.strftime('%b %Y')}–{ly_month.strftime('%b %Y')} "
+                           f"(Sep 1–Aug 31 marketing year).")
+        else:
+            ytd_start = pd.Timestamp(latest_m.year, 1, 1)
+            ytd_start_ly = pd.Timestamp(latest_m.year - 1, 1, 1)
+            ytd_label = f"YTD '{str(latest_m.year)[-2:]}"
+            ytd_label_ly = f"YTD '{str(latest_m.year - 1)[-2:]}"
+            ytd_caption = (f"YTD = Jan–{latest_m.strftime('%b %Y')} vs. "
+                           f"Jan–{ly_month.strftime('%b %Y')}.")
 
         def val_at(cat, period):
             sub = df[(df[cat_col] == cat) & (df["period"] == period)] if cat is not None \
@@ -1181,15 +1200,16 @@ else:
 
         headers = (["Feedstock"] + [m.strftime("%b '%y") for m in month_cols] +
                    [f"{ly_month.strftime('%b')} '{str(ly_month.year)[-2:]} (LY)", "M/M %", "Y/Y %",
-                    "3-Yr Avg", "vs 3-Yr", f"YTD '{str(latest_m.year)[-2:]}",
-                    f"YTD '{str(latest_m.year - 1)[-2:]}", "YTD %"])
+                    "3-Yr Avg", "vs 3-Yr", ytd_label, ytd_label_ly, "YTD %"])
         header_html = "".join(
             f"<th style='padding:4px 8px;text-align:{'left' if i == 0 else 'right'};"
             f"color:{DM_MUTED};font-size:0.68rem;text-transform:uppercase;white-space:nowrap'>"
             f"{h}</th>" for i, h in enumerate(headers))
 
         rows_html = ""
-        row_specs = [(c, c) for c in categories] + [("__TOTAL__", "Total")]
+        row_specs = [(c, c) for c in categories]
+        if len(categories) > 1:
+            row_specs.append(("__TOTAL__", "Total"))
         for cat_key, label in row_specs:
             cat = None if cat_key == "__TOTAL__" else cat_key
             vals = [val_at(cat, m) for m in month_cols]
@@ -1223,7 +1243,7 @@ else:
             f"border:1px solid {DM_BORDER};border-radius:6px;font-size:0.82rem'>"
             f"<tr>{header_html}</tr>{rows_html}</table></div>"
             f"<div class='note-text' style='margin:4px 0 16px 0'>"
-            f"YTD = Jan–{latest_m.strftime('%b %Y')} vs. Jan–{ly_month.strftime('%b %Y')}. "
+            f"{ytd_caption} "
             f"3-Yr Avg = average {latest_m.strftime('%B')} across "
             f"{seasonal_months[-1].year}–{seasonal_months[0].year}.</div>"
         )
@@ -1242,25 +1262,45 @@ else:
         bd_hist["bucket8"] = bd_hist["feedstock"].map(FEED8_MAP).fillna("Other")
 
         st.markdown("**Corn & Grain Sorghum Inputs to Ethanol Production**")
+        GRAIN_BUSHEL_LBS = 56.0  # standard test weight for both corn and grain sorghum
+        ctrl_a, ctrl_b, ctrl_c = st.columns(3)
+        with ctrl_a:
+            grain_unit = st.segmented_control("Units", ["Million lbs", "Million bushels"],
+                                              default="Million lbs", required=True, key="grain_unit")
+        with ctrl_b:
+            grain_series = st.segmented_control("Series", ["Both", "Corn Only", "Grain Sorghum Only"],
+                                                default="Both", required=True, key="grain_series")
+        with ctrl_c:
+            grain_ytd_basis = st.segmented_control(
+                "YTD basis", ["Calendar (Jan–Dec)", "Marketing Year (Sep–Aug)"],
+                default="Calendar (Jan–Dec)", required=True, key="grain_ytd_basis")
+        grain_divisor = GRAIN_BUSHEL_LBS if grain_unit == "Million bushels" else 1.0
+        grain_ytd_mode = "marketing" if grain_ytd_basis == "Marketing Year (Sep–Aug)" else "calendar"
+        grain_feeds = {"Both": ["Corn", "Grain Sorghum"], "Corn Only": ["Corn"],
+                       "Grain Sorghum Only": ["Grain Sorghum"]}[grain_series]
+
         grains = fs[fs["family"] == "Grains (Ethanol)"]
         by_grain = grains.groupby(["period", "feedstock"])["value"].sum().reset_index()
         fig = go.Figure()
         for feed, color in [("Corn", "#c9a24b"), ("Grain Sorghum", "#8a7233")]:
+            if feed not in grain_feeds:
+                continue
             sub = by_grain[by_grain["feedstock"] == feed]
             if not sub.empty:
-                fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"] / 1000, mode="lines",
+                fig.add_trace(go.Scatter(x=sub["period"], y=sub["value"] / grain_divisor, mode="lines",
                                           stackgroup="one", name=feed, line=dict(color=color)))
-        style_fig(fig, yaxis_title="Billion lbs / month")
+        style_fig(fig, yaxis_title=f"{grain_unit} / month")
         _snap_anchor("snap_feed_grains")
         st.plotly_chart(fig, width='stretch')
         _snap_toolbar("snap_feed_grains", "Corn & Grain Sorghum Inputs to Ethanol Production")
 
         grains_table = build_feedstock_compare_table(
-            fs_hist[fs_hist["family"] == "Grains (Ethanol)"], "feedstock",
-            ["Corn", "Grain Sorghum"], "snap_grains_table")
+            fs_hist[fs_hist["family"] == "Grains (Ethanol)"], "feedstock", grain_feeds,
+            "snap_grains_table", decimals=(1 if grain_divisor != 1 else 0),
+            value_divisor=grain_divisor, ytd_mode=grain_ytd_mode)
         if grains_table:
             st.markdown(grains_table, unsafe_allow_html=True)
-            _snap_toolbar("snap_grains_table", "Corn & Grain Sorghum — Monthly Comparison (Million lbs)")
+            _snap_toolbar("snap_grains_table", f"Corn & Grain Sorghum — Monthly Comparison ({grain_unit})")
 
         st.markdown("**Feedstocks for Biodiesel & Renewable Diesel Production**")
         bd = fs[fs["family"] != "Grains (Ethanol)"]
